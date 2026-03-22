@@ -1,28 +1,43 @@
 /**
  * AI Fashion Editor — Main Application Logic
- * Handles UI interactions, image uploads, state management, and API calls
+ * Handles sidebar tabs, image uploads, state management, and API calls
  */
-import { generateFashionImage } from './gemini-api.js';
+import { generateFashionImage, generateImageEdit } from './gemini-api.js';
+
+// ============================================
+// Feature Tab Definitions
+// ============================================
+const FEATURE_TABS = ['upscale', 'restore', 'skinRetouch', 'removeDefects', 'brighten', 'changeBg', 'fullUpgrade'];
+const ALL_TABS = ['fashion', ...FEATURE_TABS];
 
 // ============================================
 // State
 // ============================================
 const state = {
-  modelImage: null,      // { base64, mime, file, url }
-  clothingImage: null,    // { base64, mime, file, url }
+  activeTab: 'fashion',
+  // Fashion tab (Tab 1)
+  modelImage: null,
+  clothingImage: null,
   selectedMode: 1,
+  // Feature tabs (Tab 2–8) — per-tab uploaded image
+  featureImages: {},
+  // Shared
   isLoading: false,
   resultImageBase64: null,
   resultImageMime: null,
+  // Store the original image URL for result display
+  currentOriginalUrl: null,
 };
 
 // ============================================
 // DOM References
 // ============================================
 const $ = (sel) => document.querySelector(sel);
+const $$ = (sel) => document.querySelectorAll(sel);
 const elements = {};
 
 function cacheDom() {
+  // Settings
   elements.settingsToggle = $('#settings-toggle');
   elements.settingsPanel = $('#settings-panel');
   elements.apiKeyInput = $('#api-key-input');
@@ -30,6 +45,7 @@ function cacheDom() {
   elements.modelSelect = $('#model-select');
   elements.qualitySelect = $('#quality-select');
 
+  // Tab 1: Fashion
   elements.modelDropZone = $('#model-drop-zone');
   elements.modelFileInput = $('#model-file-input');
   elements.modelPlaceholder = $('#model-placeholder');
@@ -44,14 +60,12 @@ function cacheDom() {
   elements.clothingPreviewImg = $('#clothing-preview-img');
   elements.clothingRemove = $('#clothing-remove');
 
-  elements.modeBtns = document.querySelectorAll('.mode-btn');
-  elements.generateBtn = $('#generate-btn');
-  elements.generateBtnText = $('.generate-btn-text');
-  elements.generateBtnLoading = $('.generate-btn-loading');
+  elements.modeBtns = $$('.mode-btn');
+  elements.generateBtnFashion = $('#generate-btn-fashion');
 
+  // Shared result
   elements.errorMessage = $('#error-message');
   elements.errorText = $('#error-text');
-
   elements.resultSection = $('#result-section');
   elements.resultOriginalImg = $('#result-original-img');
   elements.resultOutputImg = $('#result-output-img');
@@ -64,56 +78,110 @@ function cacheDom() {
   elements.lightboxTitle = $('#lightbox-title');
   elements.lightboxClose = $('#lightbox-close');
   elements.lightboxDownload = $('#lightbox-download');
+
+  // Sidebar
+  elements.sidebar = $('#sidebar');
+  elements.navItems = $$('.nav-item');
+  elements.tabContents = $$('.tab-content');
+  elements.mobileMenuToggle = $('#mobile-menu-toggle');
 }
 
 // ============================================
 // Settings
 // ============================================
 function initSettings() {
-  // Load saved API key
   const savedKey = localStorage.getItem('gemini-api-key');
-  if (savedKey) {
-    elements.apiKeyInput.value = savedKey;
-  }
+  if (savedKey) elements.apiKeyInput.value = savedKey;
 
-  // Load saved model
   const savedModel = localStorage.getItem('gemini-model');
-  if (savedModel) {
-    elements.modelSelect.value = savedModel;
-  }
+  if (savedModel) elements.modelSelect.value = savedModel;
 
-  // Load saved quality
   const savedQuality = localStorage.getItem('gemini-quality');
-  if (savedQuality) {
-    elements.qualitySelect.value = savedQuality;
-  }
+  if (savedQuality) elements.qualitySelect.value = savedQuality;
 
-  // Toggle settings panel
   elements.settingsToggle.addEventListener('click', () => {
     elements.settingsPanel.classList.toggle('open');
     elements.settingsToggle.classList.toggle('active');
   });
 
-  // Save API key on change
   elements.apiKeyInput.addEventListener('input', () => {
     localStorage.setItem('gemini-api-key', elements.apiKeyInput.value.trim());
   });
 
-  // Toggle API key visibility
   elements.apiKeyToggle.addEventListener('click', () => {
     const input = elements.apiKeyInput;
     input.type = input.type === 'password' ? 'text' : 'password';
   });
 
-  // Save model on change
   elements.modelSelect.addEventListener('change', () => {
     localStorage.setItem('gemini-model', elements.modelSelect.value);
   });
 
-  // Save quality on change
   elements.qualitySelect.addEventListener('change', () => {
     localStorage.setItem('gemini-quality', elements.qualitySelect.value);
   });
+}
+
+// ============================================
+// Tab Switching
+// ============================================
+function initTabs() {
+  elements.navItems.forEach((item) => {
+    item.addEventListener('click', () => {
+      const tabId = item.dataset.tab;
+      switchTab(tabId);
+      // Close mobile sidebar
+      closeMobileSidebar();
+    });
+  });
+
+  // Mobile menu toggle
+  if (elements.mobileMenuToggle) {
+    elements.mobileMenuToggle.addEventListener('click', () => {
+      toggleMobileSidebar();
+    });
+  }
+}
+
+function switchTab(tabId) {
+  if (tabId === state.activeTab) return;
+  state.activeTab = tabId;
+
+  // Update nav items
+  elements.navItems.forEach((item) => {
+    item.classList.toggle('active', item.dataset.tab === tabId);
+  });
+
+  // Update tab content — animate
+  elements.tabContents.forEach((content) => {
+    content.classList.remove('active');
+  });
+  const target = $(`#tab-${tabId}`);
+  if (target) {
+    target.classList.add('active');
+  }
+
+  // Hide result and error when switching tabs
+  hideError();
+  elements.resultSection.style.display = 'none';
+}
+
+function toggleMobileSidebar() {
+  elements.sidebar.classList.toggle('open');
+  let overlay = $('.sidebar-overlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'sidebar-overlay';
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', closeMobileSidebar);
+  }
+  overlay.classList.toggle('active', elements.sidebar.classList.contains('open'));
+}
+
+function closeMobileSidebar() {
+  elements.sidebar.classList.remove('open');
+  const overlay = $('.sidebar-overlay');
+  if (overlay) overlay.classList.remove('active');
 }
 
 // ============================================
@@ -133,20 +201,19 @@ function fileToBase64(file) {
 }
 
 function setupUploadZone(dropZone, fileInput, placeholder, preview, previewImg, removeBtn, stateKey) {
-  // Click to upload
+  if (!dropZone) return;
+
   dropZone.addEventListener('click', (e) => {
     if (e.target.closest('.remove-btn')) return;
     fileInput.click();
   });
 
-  // File input change
   fileInput.addEventListener('change', () => {
     if (fileInput.files.length > 0) {
       handleFile(fileInput.files[0], placeholder, preview, previewImg, stateKey);
     }
   });
 
-  // Drag & Drop
   dropZone.addEventListener('dragover', (e) => {
     e.preventDefault();
     dropZone.classList.add('drag-over');
@@ -166,16 +233,19 @@ function setupUploadZone(dropZone, fileInput, placeholder, preview, previewImg, 
     }
   });
 
-  // Remove button
   removeBtn.addEventListener('click', (e) => {
     e.stopPropagation();
-    state[stateKey] = null;
+    if (stateKey === 'modelImage' || stateKey === 'clothingImage') {
+      if (state[stateKey]?.url) URL.revokeObjectURL(state[stateKey].url);
+      state[stateKey] = null;
+    } else {
+      // Feature tab image
+      if (state.featureImages[stateKey]?.url) URL.revokeObjectURL(state.featureImages[stateKey].url);
+      delete state.featureImages[stateKey];
+    }
     preview.style.display = 'none';
     placeholder.style.display = '';
     fileInput.value = '';
-    if (state[stateKey + 'Url']) {
-      URL.revokeObjectURL(state[stateKey + 'Url']);
-    }
   });
 }
 
@@ -185,7 +255,6 @@ async function handleFile(file, placeholder, preview, previewImg, stateKey) {
     return;
   }
 
-  // Max 20MB
   if (file.size > 20 * 1024 * 1024) {
     showError('File ảnh quá lớn. Tối đa 20MB.');
     return;
@@ -195,12 +264,13 @@ async function handleFile(file, placeholder, preview, previewImg, stateKey) {
     const base64 = await fileToBase64(file);
     const url = URL.createObjectURL(file);
 
-    state[stateKey] = {
-      base64,
-      mime: file.type,
-      file,
-      url,
-    };
+    const imgData = { base64, mime: file.type, file, url };
+
+    if (stateKey === 'modelImage' || stateKey === 'clothingImage') {
+      state[stateKey] = imgData;
+    } else {
+      state.featureImages[stateKey] = imgData;
+    }
 
     previewImg.src = url;
     placeholder.style.display = 'none';
@@ -213,29 +283,36 @@ async function handleFile(file, placeholder, preview, previewImg, stateKey) {
 }
 
 function initUploads() {
+  // Tab 1: Fashion (dual upload)
   setupUploadZone(
-    elements.modelDropZone,
-    elements.modelFileInput,
-    elements.modelPlaceholder,
-    elements.modelPreview,
-    elements.modelPreviewImg,
-    elements.modelRemove,
+    elements.modelDropZone, elements.modelFileInput,
+    elements.modelPlaceholder, elements.modelPreview,
+    elements.modelPreviewImg, elements.modelRemove,
     'modelImage'
   );
 
   setupUploadZone(
-    elements.clothingDropZone,
-    elements.clothingFileInput,
-    elements.clothingPlaceholder,
-    elements.clothingPreview,
-    elements.clothingPreviewImg,
-    elements.clothingRemove,
+    elements.clothingDropZone, elements.clothingFileInput,
+    elements.clothingPlaceholder, elements.clothingPreview,
+    elements.clothingPreviewImg, elements.clothingRemove,
     'clothingImage'
   );
+
+  // Tab 2–8: Feature tabs (single upload each)
+  FEATURE_TABS.forEach((feature) => {
+    const dropZone = $(`#${feature}-drop-zone`);
+    const fileInput = $(`#${feature}-file-input`);
+    const placeholder = $(`#${feature}-placeholder`);
+    const preview = $(`#${feature}-preview`);
+    const previewImg = $(`#${feature}-preview-img`);
+    const removeBtn = $(`#${feature}-remove`);
+
+    setupUploadZone(dropZone, fileInput, placeholder, preview, previewImg, removeBtn, feature);
+  });
 }
 
 // ============================================
-// Mode Selector
+// Mode Selector (Tab 1)
 // ============================================
 function initModeSelector() {
   elements.modeBtns.forEach((btn) => {
@@ -253,7 +330,6 @@ function initModeSelector() {
 function showError(message) {
   elements.errorText.textContent = message;
   elements.errorMessage.style.display = 'flex';
-  // Auto-hide after 8 seconds
   setTimeout(() => hideError(), 8000);
 }
 
@@ -262,28 +338,29 @@ function hideError() {
 }
 
 // ============================================
-// Generate
+// Generate / Process
 // ============================================
-function setLoading(loading) {
-  state.isLoading = loading;
-  elements.generateBtn.disabled = loading;
-
+function setButtonLoading(btn, loading) {
+  if (!btn) return;
+  btn.disabled = loading;
+  const textEl = btn.querySelector('.generate-btn-text');
+  const loadingEl = btn.querySelector('.generate-btn-loading');
   if (loading) {
-    elements.generateBtnText.style.display = 'none';
-    elements.generateBtnLoading.style.display = 'flex';
+    if (textEl) textEl.style.display = 'none';
+    if (loadingEl) loadingEl.style.display = 'flex';
   } else {
-    elements.generateBtnText.style.display = 'flex';
-    elements.generateBtnLoading.style.display = 'none';
+    if (textEl) textEl.style.display = 'flex';
+    if (loadingEl) loadingEl.style.display = 'none';
   }
 }
 
-async function handleGenerate() {
+// Tab 1: Fashion
+async function handleFashionGenerate() {
   hideError();
 
-  // Validate
   const apiKey = elements.apiKeyInput.value.trim();
   if (!apiKey) {
-    showError('Vui lòng nhập Gemini API Key. Nhấn ⚙️ để mở cài đặt.');
+    showError('Vui lòng nhập Gemini API Key. Nhấn ⚙️ Cài đặt ở sidebar để mở.');
     elements.settingsPanel.classList.add('open');
     elements.settingsToggle.classList.add('active');
     elements.apiKeyInput.focus();
@@ -300,7 +377,9 @@ async function handleGenerate() {
     return;
   }
 
-  setLoading(true);
+  const btn = elements.generateBtnFashion;
+  setButtonLoading(btn, true);
+  state.isLoading = true;
 
   try {
     const result = await generateFashionImage({
@@ -316,55 +395,113 @@ async function handleGenerate() {
 
     state.resultImageBase64 = result.imageBase64;
     state.resultImageMime = result.mimeType;
-
-    // Display result
+    state.currentOriginalUrl = state.modelImage.url;
     showResult();
   } catch (err) {
-    console.error('Generation error:', err);
-
-    let errorMsg = 'Có lỗi xảy ra khi tạo ảnh. ';
-    if (err.message) {
-      if (err.message.includes('API key')) {
-        errorMsg += 'API Key không hợp lệ. Vui lòng kiểm tra lại.';
-      } else if (err.message.includes('quota') || err.message.includes('rate')) {
-        errorMsg += 'Đã vượt quá giới hạn API. Vui lòng thử lại sau.';
-      } else if (err.message.includes('safety') || err.message.includes('blocked')) {
-        errorMsg += 'Nội dung bị chặn bởi bộ lọc an toàn. Vui lòng thử ảnh khác.';
-      } else {
-        errorMsg += err.message;
-      }
-    }
-
-    showError(errorMsg);
+    handleApiError(err);
   } finally {
-    setLoading(false);
+    setButtonLoading(btn, false);
+    state.isLoading = false;
   }
 }
 
-function showResult() {
-  // Show original model image
-  elements.resultOriginalImg.src = state.modelImage.url;
+// Tab 2–8: Feature
+async function handleFeatureGenerate(featureKey) {
+  hideError();
 
-  // Show AI result
+  const apiKey = elements.apiKeyInput.value.trim();
+  if (!apiKey) {
+    showError('Vui lòng nhập Gemini API Key. Nhấn ⚙️ Cài đặt ở sidebar để mở.');
+    elements.settingsPanel.classList.add('open');
+    elements.settingsToggle.classList.add('active');
+    elements.apiKeyInput.focus();
+    return;
+  }
+
+  const imgData = state.featureImages[featureKey];
+  if (!imgData) {
+    showError('Vui lòng tải lên ảnh cần xử lý.');
+    return;
+  }
+
+  const btn = $(`#generate-btn-${featureKey}`);
+  setButtonLoading(btn, true);
+  state.isLoading = true;
+
+  try {
+    const result = await generateImageEdit({
+      apiKey,
+      model: elements.modelSelect.value,
+      featureKey,
+      quality: elements.qualitySelect.value,
+      imageBase64: imgData.base64,
+      imageMime: imgData.mime,
+    });
+
+    state.resultImageBase64 = result.imageBase64;
+    state.resultImageMime = result.mimeType;
+    state.currentOriginalUrl = imgData.url;
+    showResult();
+  } catch (err) {
+    handleApiError(err);
+  } finally {
+    setButtonLoading(btn, false);
+    state.isLoading = false;
+  }
+}
+
+function handleApiError(err) {
+  console.error('Generation error:', err);
+  let errorMsg = 'Có lỗi xảy ra khi xử lý ảnh. ';
+  if (err.message) {
+    if (err.message.includes('API key')) {
+      errorMsg += 'API Key không hợp lệ. Vui lòng kiểm tra lại.';
+    } else if (err.message.includes('quota') || err.message.includes('rate')) {
+      errorMsg += 'Đã vượt quá giới hạn API. Vui lòng thử lại sau.';
+    } else if (err.message.includes('safety') || err.message.includes('blocked')) {
+      errorMsg += 'Nội dung bị chặn bởi bộ lọc an toàn. Vui lòng thử ảnh khác.';
+    } else {
+      errorMsg += err.message;
+    }
+  }
+  showError(errorMsg);
+}
+
+function showResult() {
+  elements.resultOriginalImg.src = state.currentOriginalUrl;
   const resultUrl = `data:${state.resultImageMime};base64,${state.resultImageBase64}`;
   elements.resultOutputImg.src = resultUrl;
-
   elements.resultSection.style.display = '';
-
-  // Scroll to result
   setTimeout(() => {
     elements.resultSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, 100);
 }
 
 function initGenerate() {
-  elements.generateBtn.addEventListener('click', handleGenerate);
+  // Tab 1: Fashion
+  if (elements.generateBtnFashion) {
+    elements.generateBtnFashion.addEventListener('click', handleFashionGenerate);
+  }
 
-  elements.retryBtn.addEventListener('click', () => {
-    elements.resultSection.style.display = 'none';
-    handleGenerate();
+  // Tab 2–8: Feature buttons
+  FEATURE_TABS.forEach((feature) => {
+    const btn = $(`#generate-btn-${feature}`);
+    if (btn) {
+      btn.addEventListener('click', () => handleFeatureGenerate(feature));
+    }
   });
 
+  // Retry button
+  elements.retryBtn.addEventListener('click', () => {
+    elements.resultSection.style.display = 'none';
+    if (state.activeTab === 'fashion') {
+      handleFashionGenerate();
+    } else {
+      handleFeatureGenerate(state.activeTab);
+    }
+  });
+
+  // Download button
   elements.downloadBtn.addEventListener('click', () => {
     downloadResultImage();
   });
@@ -377,7 +514,6 @@ function downloadResultImage() {
   if (!state.resultImageBase64) return;
 
   try {
-    // Convert base64 to Blob for reliable download
     const byteChars = atob(state.resultImageBase64);
     const byteArrays = [];
     for (let offset = 0; offset < byteChars.length; offset += 512) {
@@ -394,12 +530,10 @@ function downloadResultImage() {
     const ext = state.resultImageMime.includes('png') ? 'png' : 'jpg';
     const link = document.createElement('a');
     link.href = blobUrl;
-    link.download = `fashion-editor-result-${Date.now()}.${ext}`;
+    link.download = `ai-editor-${state.activeTab}-${Date.now()}.${ext}`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-
-    // Clean up blob URL after a delay
     setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
   } catch (err) {
     console.error('Download error:', err);
@@ -414,7 +548,6 @@ function openLightbox(imgSrc, title) {
   elements.lightboxImg.src = imgSrc;
   elements.lightboxTitle.textContent = title || 'Xem ảnh';
   elements.lightboxOverlay.style.display = 'flex';
-  // Trigger animation
   requestAnimationFrame(() => {
     elements.lightboxOverlay.classList.add('active');
   });
@@ -431,7 +564,6 @@ function closeLightbox() {
 }
 
 function initLightbox() {
-  // Click result images to open lightbox
   elements.resultOriginalImg.addEventListener('click', () => {
     if (elements.resultOriginalImg.src) {
       openLightbox(elements.resultOriginalImg.src, 'Ảnh gốc');
@@ -444,24 +576,20 @@ function initLightbox() {
     }
   });
 
-  // Close lightbox
   elements.lightboxClose.addEventListener('click', closeLightbox);
 
-  // Close on overlay click (not on image)
   elements.lightboxOverlay.addEventListener('click', (e) => {
     if (e.target === elements.lightboxOverlay || e.target.classList.contains('lightbox-body')) {
       closeLightbox();
     }
   });
 
-  // Close on ESC
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && elements.lightboxOverlay.classList.contains('active')) {
       closeLightbox();
     }
   });
 
-  // Download from lightbox
   elements.lightboxDownload.addEventListener('click', () => {
     downloadResultImage();
   });
@@ -473,11 +601,11 @@ function initLightbox() {
 function init() {
   cacheDom();
   initSettings();
+  initTabs();
   initUploads();
   initModeSelector();
   initGenerate();
   initLightbox();
 }
 
-// Run
 document.addEventListener('DOMContentLoaded', init);
